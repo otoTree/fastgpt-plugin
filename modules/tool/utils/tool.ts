@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { ToolSetConfigType } from '@tool/type';
-import { ToolConfigSchema, ToolSchema, type SystemVarType } from '@tool/type/tool';
+import { ToolConfigSchema, ToolSchema, type RunToolSecondParamsType } from '@tool/type/tool';
 import type { ToolListItemType } from '@tool/type/api';
 import {
   FlowNodeInputTypeEnum,
@@ -15,14 +15,14 @@ export const exportTool = <T extends z.Schema, D extends z.Schema>({
   OutputType,
   config
 }: {
-  toolCb: (props: z.infer<T>, systemVar: SystemVarType) => Promise<Record<string, any>>;
+  toolCb: (props: z.infer<T>, e: RunToolSecondParamsType) => Promise<Record<string, any>>;
   InputType: T;
   OutputType: D;
   config: z.infer<typeof ToolConfigSchema>;
 }) => {
-  const cb = async (props: z.infer<T>, systemVar: SystemVarType) => {
+  const cb = async (props: z.infer<T>, e: RunToolSecondParamsType) => {
     try {
-      const output = await toolCb(InputType.parse(props), systemVar);
+      const output = await toolCb(InputType.parse(props), e);
       return {
         output: OutputType.parse(output)
       };

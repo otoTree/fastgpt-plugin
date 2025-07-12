@@ -1,7 +1,6 @@
 import { Worker } from 'worker_threads';
 import { getTool } from 'modules/tool/controller';
-import { ToolCallbackReturnSchema } from '../../modules/tool/type/tool';
-import { z } from 'zod';
+import type { StreamDataType, ToolCallbackReturnSchemaType } from '@tool/type/tool';
 import { addLog } from '@/utils/log';
 import { isProd } from '@/constants';
 import type { Worker2MainMessageType } from './type';
@@ -159,8 +158,9 @@ export async function dispatchWithNewWorker(data: {
   toolId: string;
   inputs: Record<string, any>;
   systemVar: Record<string, any>;
+  onMessage?: (message: StreamDataType) => void; // streaming callback 可选
 }) {
-  const { toolId } = data;
+  const { toolId, onMessage, ...workerData } = data; // 解构出 onMessage，剩余数据传给 worker
   const tool = getTool(toolId);
 
   if (!tool || !tool.cb) {
@@ -183,59 +183,59 @@ export async function dispatchWithNewWorker(data: {
         })
   });
 
-  const resolvePromise = new Promise<z.infer<typeof ToolCallbackReturnSchema>>(
-    (resolve, reject) => {
-      worker.on('message', async ({ type, data }: Worker2MainMessageType) => {
-        if (type === 'success') {
-          resolve(data);
-          worker.terminate();
-        } else if (type === 'error') {
-          reject(data);
-          worker.terminate();
-        } else if (type === 'log') {
-          const logData = Array.isArray(data) ? data : [data];
-          console.log(...logData);
-        } else if (type === 'uploadFile') {
-          try {
-            const result = await global.s3Server.uploadFileAdvanced(data);
-            worker.postMessage({
-              type: 'uploadFileResponse',
-              data: {
-                data: result
-              }
-            });
-          } catch (error) {
-            addLog.error(`Tool upload file error`, error);
-            worker.postMessage({
-              type: 'uploadFileResponse',
-              data: {
-                error: 'Tool upload file error'
-              }
-            });
-          }
-        }
-      });
-
-      worker.on('error', (err) => {
-        addLog.error(`Run tool error`, err);
-        reject(err);
+  return new Promise<ToolCallbackReturnSchemaType>((resolve, reject) => {
+    worker.on('message', async ({ type, data }: Worker2MainMessageType) => {
+      if (type === 'success') {
+        resolve(data);
         worker.terminate();
-      });
-      worker.on('messageerror', (err) => {
-        addLog.error(`Run tool error`, err);
-        reject(err);
+      } else if (type === 'stream') {
+        onMessage?.(data);
+      } else if (type === 'error') {
+        reject(data);
         worker.terminate();
-      });
-
-      worker.postMessage({
-        type: 'runTool',
-        data: {
-          toolDirName: tool.toolDirName,
-          ...data
+      } else if (type === 'log') {
+        const logData = Array.isArray(data) ? data : [data];
+        console.log(...logData);
+      } else if (type === 'uploadFile') {
+        try {
+          const result = await global.s3Server.uploadFileAdvanced(data);
+          worker.postMessage({
+            type: 'uploadFileResponse',
+            data: {
+              data: result
+            }
+          });
+        } catch (error) {
+          addLog.error(`Tool upload file error`, error);
+          worker.postMessage({
+            type: 'uploadFileResponse',
+            data: {
+              error: 'Tool upload file error'
+            }
+          });
         }
-      });
-    }
-  );
+      }
+    });
 
-  return resolvePromise;
+    worker.on('error', (err) => {
+      addLog.error(`Run tool error`, err);
+      reject(err);
+      worker.terminate();
+    });
+    worker.on('messageerror', (err) => {
+      addLog.error(`Run tool error`, err);
+      reject(err);
+      worker.terminate();
+    });
+
+    worker.postMessage({
+      type: 'runTool',
+      data: {
+        toolDirName: tool.toolDirName,
+        toolId,
+        inputs: workerData.inputs,
+        systemVar: workerData.systemVar
+      }
+    });
+  });
 }
