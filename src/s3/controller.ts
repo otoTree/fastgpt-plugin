@@ -6,6 +6,7 @@ import * as path from 'path';
 import { z } from 'zod';
 import { addLog } from '@/utils/log';
 import { getErrText } from '@tool/utils/err';
+import { catchError } from '@/utils/catch';
 
 export const FileInputSchema = z
   .object({
@@ -45,61 +46,67 @@ export class S3Service {
   }
 
   async initialize() {
-    try {
+    const [, err] = await catchError(async () => {
       addLog.info(`Checking bucket: ${this.config.bucket}`);
       const bucketExists = await this.minioClient.bucketExists(this.config.bucket);
 
       if (!bucketExists) {
         addLog.info(`Creating bucket: ${this.config.bucket}`);
-        await this.minioClient.makeBucket(this.config.bucket);
+        const [, err] = await catchError(() => this.minioClient.makeBucket(this.config.bucket));
+        if (err) {
+          addLog.error(`Failed to create bucket: ${this.config.bucket}`);
+          return Promise.reject(err);
+        }
       }
 
-      // 同时设置访问策略和生命周期规则
-      await Promise.all([
-        this.minioClient.setBucketPolicy(
-          this.config.bucket,
-          JSON.stringify({
-            Version: '2012-10-17',
-            Statement: [
+      const [, err] = await catchError(() =>
+        Promise.all([
+          this.minioClient.setBucketPolicy(
+            this.config.bucket,
+            JSON.stringify({
+              Version: '2012-10-17',
+              Statement: [
+                {
+                  Effect: 'Allow',
+                  Principal: '*',
+                  Action: ['s3:GetObject'],
+                  Resource: [`arn:aws:s3:::${this.config.bucket}/*`]
+                }
+              ]
+            })
+          ),
+          this.minioClient.setBucketLifecycle(this.config.bucket, {
+            Rule: [
               {
-                Effect: 'Allow',
-                Principal: '*',
-                Action: ['s3:GetObject'],
-                Resource: [`arn:aws:s3:::${this.config.bucket}/*`]
+                ID: 'AutoDeleteRule',
+                Status: 'Enabled',
+                Expiration: {
+                  Days: this.config.retentionDays,
+                  DeleteMarker: false,
+                  DeleteAll: false
+                }
               }
             ]
           })
-        ),
-        this.minioClient.setBucketLifecycle(this.config.bucket, {
-          Rule: [
-            {
-              ID: 'AutoDeleteRule',
-              Status: 'Enabled',
-              Expiration: {
-                Days: this.config.retentionDays,
-                DeleteMarker: false,
-                DeleteAll: false
-              }
-            }
-          ]
-        })
-      ]);
-
-      addLog.info(
-        `Bucket initialized, ${this.config.bucket} configured successfully with ${this.config.retentionDays} days retention`
+        ])
       );
-    } catch (error: any) {
-      const errMsg = getErrText(error);
-      if (errMsg.includes('Method Not Allowed')) {
-        addLog.warn(
-          'Method Not Allowed - bucket may exist with different permissions,check document for more details'
-        );
-      } else if (errMsg.includes('Access Denied.')) {
-        addLog.warn('Access Denied - check your access key and secret key');
-        return;
+
+      if (err) {
+        addLog.warn(`Failed to set bucket policy: ${this.config.bucket}`);
       }
-      return Promise.reject(error);
+
+      addLog.info(`Bucket initialized, ${this.config.bucket} configured successfully.`);
+    });
+    const errMsg = getErrText(err);
+    if (errMsg.includes('Method Not Allowed')) {
+      addLog.warn(
+        'Method Not Allowed - bucket may exist with different permissions,check document for more details'
+      );
+    } else if (errMsg.includes('Access Denied.')) {
+      addLog.warn('Access Denied - check your access key and secret key');
+      return;
     }
+    return Promise.reject(err);
   }
 
   private generateFileId(): string {
