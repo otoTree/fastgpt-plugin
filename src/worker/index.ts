@@ -4,7 +4,7 @@ import type { StreamDataType, ToolCallbackReturnSchemaType } from '@tool/type/to
 import { addLog } from '@/utils/log';
 import { isProd } from '@/constants';
 import type { Worker2MainMessageType } from './type';
-import { getErrText } from '@tool/utils';
+import { getErrText } from '@tool/utils/err';
 
 type WorkerQueueItem = {
   id: string;
@@ -186,14 +186,11 @@ export async function dispatchWithNewWorker(data: {
 
   return new Promise<ToolCallbackReturnSchemaType>((resolve, reject) => {
     worker.on('message', async ({ type, data }: Worker2MainMessageType) => {
-      if (type === 'success') {
+      if (type === 'done') {
         resolve(data);
         worker.terminate();
       } else if (type === 'stream') {
         onMessage?.(data);
-      } else if (type === 'error') {
-        reject(data);
-        worker.terminate();
       } else if (type === 'log') {
         const logData = Array.isArray(data) ? data : [data];
         console.log(...logData);
