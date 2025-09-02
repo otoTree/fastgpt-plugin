@@ -1,7 +1,8 @@
 import z from 'zod';
 import { c } from '@/contract/init';
 import { ToolListItemSchema, type ToolListItemType } from './type/api';
-import { SystemVarSchema } from './type/tool';
+import { ToolTypeEnum } from './type/tool';
+import { ToolTypeListSchema } from './controller';
 
 export const toolContract = c.router(
   {
@@ -22,6 +23,14 @@ export const toolContract = c.router(
       }),
       responses: {
         200: ToolListItemSchema
+      }
+    },
+    getType: {
+      path: '/getType',
+      method: 'GET',
+      description: 'Get tool type',
+      responses: {
+        200: ToolTypeListSchema
       }
     }
   },
