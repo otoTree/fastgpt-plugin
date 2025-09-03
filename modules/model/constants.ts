@@ -7,7 +7,7 @@ export const modelsBuffer: {
   data: []
 };
 
-export const ModelProviders = {
+export const ModelProviderMap = {
   OpenAI: {
     en: 'OpenAI',
     'zh-CN': 'OpenAI',
@@ -179,10 +179,28 @@ export const ModelProviders = {
     'zh-Hant': '其他'
   }
 };
+export const ModelProviders = Object.entries(ModelProviderMap)
+  .map(([key, value]) => {
+    return {
+      provider: key,
+      value
+    };
+  })
+  .sort(({ provider: a }, { provider: b }) => {
+    const priorityProvider = process.env.MODEL_PROVIDER_PRIORITY;
+    if (!priorityProvider) return 0;
 
-export type ModelProviderIdType = keyof typeof ModelProviders;
+    const aProvider = priorityProvider.includes(a);
+    const bProvider = priorityProvider.includes(b);
 
-export type aiproxyType = Record<
+    if (aProvider && !bProvider) return -1;
+    if (!aProvider && bProvider) return 1;
+    return 0;
+  });
+
+export type ModelProviderIdType = keyof typeof ModelProviderMap;
+
+export type AiproxyMapProviderType = Record<
   number,
   {
     name: I18nStringType | string;
@@ -191,7 +209,7 @@ export type aiproxyType = Record<
   }
 >;
 
-export const aiproxyIdMap: aiproxyType = {
+export const aiproxyIdMap: AiproxyMapProviderType = {
   1: {
     name: 'OpenAI',
     provider: 'OpenAI'
@@ -397,7 +415,6 @@ export const aiproxyIdMap: aiproxyType = {
   },
   48: {
     name: 'Sangfor',
-    provider: 'Sangfor',
-    avatar: 'model/sangfor'
+    provider: 'Sangfor'
   }
 };
