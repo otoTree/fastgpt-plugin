@@ -30,4 +30,5 @@ export const ToolListItemSchema = z.object({
     .optional()
     .describe('The secret input list of the tool')
 });
+
 export type ToolListItemType = z.infer<typeof ToolListItemSchema>;
