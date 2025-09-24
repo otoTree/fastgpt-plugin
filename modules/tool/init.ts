@@ -1,36 +1,30 @@
 import path from 'path';
 import { isProd } from '@/constants';
 import type { ToolType, ToolConfigWithCbType, ToolSetType } from './type';
-import { tools } from './constants';
+import { builtinTools, uploadedTools } from './constants';
 import fs from 'fs';
 import { addLog } from '@/utils/log';
 import { ToolTypeEnum } from './type/tool';
+import { BuiltInToolBaseURL, UploadedToolBaseURL } from './utils';
+import { refreshUploadedTools } from './controller';
 
 const filterToolList = ['.DS_Store', '.git', '.github', 'node_modules', 'dist', 'scripts'];
 
-const saveFile = async (url: string, path: string) => {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download file: ${response.statusText}`);
-  }
-  const buffer = await response.arrayBuffer();
-  fs.writeFileSync(path, Buffer.from(buffer));
-  return buffer;
-};
-
 // Load tool or toolset and its children
 export const LoadToolsByFilename = async (
-  basePath: string,
-  filename: string
+  filename: string,
+  toolSource: 'built-in' | 'uploaded' = 'built-in'
 ): Promise<ToolType[]> => {
   const tools: ToolType[] = [];
 
-  const toolRootPath = path.join(basePath, filename);
+  const basepath = toolSource === 'uploaded' ? UploadedToolBaseURL : BuiltInToolBaseURL;
+  const toolRootPath = path.join(basepath, filename);
   const rootMod = (await import(toolRootPath)).default as ToolSetType;
   const defaultIcon = `/imgs/tools/${filename.split('.')[0]}.svg`;
 
+  // Tool set
   if ('children' in rootMod || fs.existsSync(path.join(toolRootPath, 'children'))) {
-    const toolsetId = isProd ? rootMod.toolId! : filename;
+    const toolsetId = isProd || toolSource === 'uploaded' ? rootMod.toolId! : filename;
     const icon = rootMod.icon || defaultIcon;
 
     // is toolSet
@@ -39,7 +33,8 @@ export const LoadToolsByFilename = async (
       type: rootMod.type || ToolTypeEnum.other,
       toolId: toolsetId,
       icon,
-      toolDirName: filename,
+      toolDirName: `${toolSource}/${filename}`,
+      toolSource,
       cb: () => Promise.resolve({}),
       versionList: []
     });
@@ -60,7 +55,8 @@ export const LoadToolsByFilename = async (
       return children;
     };
 
-    const children = isProd ? rootMod.children : await getChildren(toolRootPath);
+    const children =
+      isProd || toolSource === 'uploaded' ? rootMod.children : await getChildren(toolRootPath);
 
     for (const child of children) {
       const toolId = child.toolId!;
@@ -73,7 +69,8 @@ export const LoadToolsByFilename = async (
         courseUrl: rootMod.courseUrl,
         author: rootMod.author,
         icon,
-        toolDirName: filename
+        toolDirName: `${toolSource}/${filename}`,
+        toolSource
       });
     }
   } else {
@@ -84,23 +81,55 @@ export const LoadToolsByFilename = async (
       type: tool.type || ToolTypeEnum.tools,
       icon: tool.icon || defaultIcon,
       toolId: tool.toolId || filename,
-      toolDirName: filename
+      toolDirName: `${toolSource}/${filename}`,
+      toolSource
     });
   }
 
   return tools;
 };
 
-export async function initTool() {
-  const basePath = isProd
-    ? process.env.TOOLS_DIR || path.join(process.cwd(), 'dist', 'tools')
-    : path.join(__dirname, 'packages');
-
-  const toolDirs = fs.readdirSync(basePath).filter((file) => !filterToolList.includes(file));
-  for (const tool of toolDirs) {
-    const tmpTools = await LoadToolsByFilename(basePath, tool);
-    tools.push(...tmpTools);
+async function initBuiltInTools() {
+  // Create directory if it doesn't exist
+  if (!fs.existsSync(BuiltInToolBaseURL)) {
+    addLog.info(`Creating built-in tools directory: ${BuiltInToolBaseURL}`);
+    fs.mkdirSync(BuiltInToolBaseURL, { recursive: true });
   }
 
-  addLog.info(`Load tools in ${isProd ? 'production' : 'development'} env, total: ${tools.length}`);
+  builtinTools.length = 0;
+  const toolDirs = fs
+    .readdirSync(BuiltInToolBaseURL)
+    .filter((file) => !filterToolList.includes(file));
+  for (const tool of toolDirs) {
+    const tmpTools = await LoadToolsByFilename(tool, 'built-in');
+    builtinTools.push(...tmpTools);
+  }
+
+  addLog.info(
+    `Load builtin tools in ${isProd ? 'production' : 'development'} env, total: ${toolDirs.length}`
+  );
 }
+
+export async function initUploadedTool() {
+  // Create directory if it doesn't exist
+  if (!fs.existsSync(UploadedToolBaseURL)) {
+    addLog.info(`Creating uploaded tools directory: ${UploadedToolBaseURL}`);
+    fs.mkdirSync(UploadedToolBaseURL, { recursive: true });
+  }
+
+  uploadedTools.length = 0;
+
+  const toolDirs = fs
+    .readdirSync(UploadedToolBaseURL)
+    .filter((file) => !filterToolList.includes(file));
+  for (const tool of toolDirs) {
+    const tmpTools = await LoadToolsByFilename(tool, 'uploaded');
+    uploadedTools.push(...tmpTools);
+  }
+
+  addLog.info(
+    `Load uploaded tools in ${isProd ? 'production' : 'development'} env, total: ${toolDirs.length}`
+  );
+}
+
+export const initTools = async () => Promise.all([initBuiltInTools(), refreshUploadedTools()]);
