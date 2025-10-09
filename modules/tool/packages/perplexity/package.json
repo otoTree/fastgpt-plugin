@@ -1,5 +1,5 @@
 {
-  "name": "@fastgpt-plugins/tool-chat-ppt",
+  "name": "@fastgpt-plugins/tool-perplexity",
   "module": "index.ts",
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@perplexity-ai/perplexity_ai": "^0.10.0",
     "zod": "^3.24.2"
   }
 }
