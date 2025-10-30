@@ -22,11 +22,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install tool package dependencies
-<<<<<<< Updated upstream
-        run: bun run install-all
-=======
         run: bun run install:plugins
->>>>>>> Stashed changes
 
       - name: Build and deploy to marketplace
         env:
