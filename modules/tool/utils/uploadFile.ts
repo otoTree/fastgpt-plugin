@@ -56,10 +56,10 @@ export const uploadFile = async (data: FileInput) => {
       });
     });
   } else {
-    const { fileUploadS3Server } = await import('@/s3');
-    return await fileUploadS3Server.uploadFileAdvanced({
+    const { publicS3Server } = await import('@/s3');
+    return await publicS3Server.uploadFileAdvanced({
       ...data,
-      ...(data.buffer ? { buffer: Buffer.from(data.buffer) } : {})
+      ...(data.buffer ? { buffer: data.buffer } : {})
     });
   }
 };

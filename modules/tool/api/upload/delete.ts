@@ -1,26 +1,39 @@
 import { contract } from '@/contract';
-import { MongoPluginModel } from '@/mongo/models/plugins';
+import { MongoPlugin } from '@/mongo/models/plugins';
 import { mongoSessionRun } from '@/mongo/utils';
 import { s } from '@/router/init';
-import { pluginFileS3Server } from '@/s3';
+import { privateS3Server, publicS3Server } from '@/s3';
 import { refreshVersionKey } from '@/cache';
 import { SystemCacheKeyEnum } from '@/cache/type';
+import { UploadToolsS3Path } from '@tool/constants';
+import { addLog } from '@/utils/log';
 
-export default s.route(contract.tool.upload.delete, async ({ query: { toolId: rawToolId } }) => {
-  const toolId = rawToolId.split('-').slice(1).join('-');
-  await mongoSessionRun(async (session) => {
-    const result = await MongoPluginModel.findOneAndDelete({ toolId }).session(session);
-    if (!result) {
+export default s.route(contract.tool.upload.delete, async ({ query: { toolId } }) => {
+  addLog.debug(`Deleting tool: ${toolId}`);
+  const res = await mongoSessionRun(async (session) => {
+    const result = await MongoPlugin.findOneAndDelete({ toolId }).session(session);
+    if (!result || !result.toolId) {
       return {
         status: 404,
         body: {
           error: `Tool with toolId ${toolId} not found in MongoDB`
         }
-      };
+      } as const;
     }
-    await pluginFileS3Server.removeFile(result.objectName);
-    await refreshVersionKey(SystemCacheKeyEnum.systemTool);
+
+    await Promise.all([
+      privateS3Server.removeFile(`${UploadToolsS3Path}/${result.toolId}.js`),
+      (async () => {
+        const files = await publicS3Server.getFiles(`${UploadToolsS3Path}/${result.toolId}`);
+        await publicS3Server.removeFiles(files);
+      })()
+    ]);
   });
+
+  await refreshVersionKey(SystemCacheKeyEnum.systemTool);
+
+  if (res) return res;
+  addLog.debug(`Deleted tool: ${toolId}`);
 
   return {
     status: 200,

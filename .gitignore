@@ -3,10 +3,12 @@ coverage
 dist
 node_modules
 .DS_Store
-.tsbuildinfo
+*.tsbuildinfo
 public/imgs/
 pnpm-lock.yaml
 .local
 *.local
 *.local.*
 local/
+.env.*
+!.env.*.template

@@ -1,13 +1,12 @@
 import { defineToolSet } from '@tool/type';
-import { ToolTypeEnum } from '@tool/type/tool';
+import { ToolTagEnum } from '@tool/type/tags';
 
 export default defineToolSet({
   name: {
     'zh-CN': '数据库操作',
     en: 'Database Operations'
   },
-  type: ToolTypeEnum.tools,
-  // icon: 'core/workflow/template/datasource',
+  tags: [ToolTagEnum.enum.tools],
   description: {
     'zh-CN':
       '数据库操作工具集，包含 MySQL、PostgreSQL、Microsoft SQL Server、Oracle、ClickHouse 数据库操作功能',
