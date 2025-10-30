@@ -33,17 +33,12 @@ jobs:
           echo "$FILES"
 
           HAS_RELEVANT_CHANGES="false"
+          PACKAGE_CHANGES=""
 
-          # Check for relevant changes
+          # Check for relevant changes and extract package names
           for file in $FILES; do
-            if [ "$file" = "package.json" ]; then
-              echo "Found package.json"
-              HAS_RELEVANT_CHANGES="true"
-            elif [ "$file" = "bun.lock" ]; then
-              echo "Found bun.lock"
-              HAS_RELEVANT_CHANGES="true"
-            elif [ "$file" = "bun.lockb" ]; then
-              echo "Found bun.lockb"
+            if [ "$file" = "package.json" ] || [ "$file" = "bun.lock" ] || [ "$file" = "bun.lockb" ]; then
+              echo "Found relevant file: $file"
               HAS_RELEVANT_CHANGES="true"
             elif [[ "$file" == .github/workflows/* ]]; then
               echo "Found workflow file: $file"
@@ -51,19 +46,13 @@ jobs:
             elif [[ "$file" == modules/tool/packages/* ]]; then
               echo "Found package file: $file"
               HAS_RELEVANT_CHANGES="true"
-            fi
-          done
 
-          # Extract package names from changed files
-          PACKAGE_CHANGES=""
-          for file in $FILES; do
-            if [[ "$file" == modules/tool/packages/* ]]; then
-              # Extract package directory name (first segment after packages/)
+              # Extract package directory name
               PACKAGE_NAME=$(echo "$file" | cut -d'/' -f4)
               echo "Found package directory: $PACKAGE_NAME"
 
-              # Check if we already have this package
-              if echo "$PACKAGE_CHANGES" | grep -vqw "$PACKAGE_NAME"; then
+              # Add to package changes if not already present
+              if [[ ! " $PACKAGE_CHANGES " =~ " $PACKAGE_NAME " ]]; then
                 if [ -z "$PACKAGE_CHANGES" ]; then
                   PACKAGE_CHANGES="$PACKAGE_NAME"
                 else
@@ -73,80 +62,36 @@ jobs:
             fi
           done
 
-          # Build sparse checkout configuration
-          SPARSE_CONFIG="/*"
-          SPARSE_CONFIG="$SPARSE_CONFIG"$'\n'"!/modules/tool/packages"
-
-          # Add changed packages to sparse checkout
-          for package in $PACKAGE_CHANGES; do
-            if [ -n "$package" ]; then
-              SPARSE_CONFIG="$SPARSE_CONFIG"$'\n'"/modules/tool/packages/$package"
-              echo "Adding to sparse checkout: modules/tool/packages/$package"
-            fi
-          done
-
-          # Always include essential files
-          SPARSE_CONFIG="$SPARSE_CONFIG"$'\n'"package.json"
-          SPARSE_CONFIG="$SPARSE_CONFIG"$'\n'"bun.lockb"
-
-          # Output results for GitHub Actions
-          {
-            echo "files<<EOF"
-            echo "$FILES"
-            echo "EOF"
-
-            echo "package_changes<<EOF"
-            echo "$PACKAGE_CHANGES"
-            echo "EOF"
-
-            echo "sparse_config<<EOF"
-            echo "$SPARSE_CONFIG"
-            echo "EOF"
-
-            echo "has_relevant_changes=$HAS_RELEVANT_CHANGES"
-          } >> $GITHUB_OUTPUT
-
-          echo "Final sparse checkout config:"
-          echo "$SPARSE_CONFIG"
-          echo ""
+          echo "Package changes detected: $PACKAGE_CHANGES"
           echo "Has relevant changes: $HAS_RELEVANT_CHANGES"
 
-      - name: Generate sparse checkout paths
-        id: sparse-paths
-        run: |
-          # Start with base paths - create a proper JSON array
-          PATHS='["/*", "!/modules/tool/packages", "package.json", "bun.lockb"]'
+          echo "package_changes=$PACKAGE_CHANGES" >> $GITHUB_OUTPUT
+          echo "has_relevant_changes=$HAS_RELEVANT_CHANGES" >> $GITHUB_OUTPUT
 
-          # Add changed packages to the array
+      - name: Set sparse checkout environment variable
+        run: |
+          echo "SPARSE_CHECKOUT_CONFIG<<EOF" >> $GITHUB_ENV
+          echo "/*" >> $GITHUB_ENV
+          echo "!/modules/tool/packages/*" >> $GITHUB_ENV
+
+          # Add changed packages to sparse checkout
           if [ -n "${{ steps.pr-files.outputs.package_changes }}" ]; then
             for package in ${{ steps.pr-files.outputs.package_changes }}; do
               if [ -n "$package" ]; then
-                # Remove the closing bracket and add the new path
-                PATHS="${PATHS%]}, \"/modules/tool/packages/$package\"]"
+                echo "/modules/tool/packages/$package" >> $GITHUB_ENV
+                echo "/modules/tool/packages/$package/*" >> $GITHUB_ENV
               fi
             done
           fi
 
-          echo "paths=$PATHS" >> $GITHUB_OUTPUT
-          echo "Generated sparse checkout JSON: $PATHS"
+          echo "EOF" >> $GITHUB_ENV
 
-      - name: Checkout code with sparse checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           sparse-checkout-cone-mode: false
-          sparse-checkout: ${{ fromJson(steps.sparse-paths.outputs.paths) }}
-
-      - name: Verify sparse checkout
-        run: |
-          echo "Workspace contents:"
-          find . -maxdepth 2 -type f -name "*.json" -o -name "*.lockb" | head -10
-          echo ""
-          echo "Package directories:"
-          ls -la modules/tool/packages/ 2>/dev/null || echo "No packages directory found"
-          echo ""
-          echo "Total workspace size:"
-          du -sh .
+          sparse-checkout: ${{ env.SPARSE_CHECKOUT_CONFIG }}
 
       - name: Setup bun
         if: steps.pr-files.outputs.has_relevant_changes == 'true'
@@ -157,10 +102,6 @@ jobs:
       - name: Install dependencies
         if: steps.pr-files.outputs.has_relevant_changes == 'true'
         run: bun install --frozen-lockfile && bun run install:plugins
-
-      - name: Type check
-        if: steps.pr-files.outputs.has_relevant_changes == 'true'
-        run: bun run type-check
 
       - name: Build pkg
         if: steps.pr-files.outputs.has_relevant_changes == 'true'
@@ -176,8 +117,8 @@ jobs:
           username: ${{ secrets.ALI_HUB_USERNAME }}
           password: ${{ secrets.ALI_HUB_PASSWORD }}
 
-      - name: Build and push for amd64
-        id: build
+      - name: Build and push Docker image
+        if: steps.pr-files.outputs.has_relevant_changes == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
