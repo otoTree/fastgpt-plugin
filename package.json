@@ -37,7 +37,8 @@
     "vitest": "3.1.2"
   },
   "peerDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "zod": "^3.25.76"
   },
   "workspaces": [
     "sdk",
@@ -52,5 +53,10 @@
       "npm run prettier",
       "git add ."
     ]
+  },
+  "dependencies": {
+    "@ts-rest/core": "3.52.1",
+    "@ts-rest/express": "3.52.1",
+    "@ts-rest/open-api": "3.52.1"
   }
 }

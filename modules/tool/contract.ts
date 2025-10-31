@@ -1,4 +1,4 @@
-import z from 'zod';
+import { z } from 'zod';
 import { c } from '@/contract/init';
 import { ToolDetailSchema, type ToolDetailType, ToolTagListSchema } from './type/api';
 
@@ -12,7 +12,7 @@ export const toolUploadContract = c.router(
       responses: {
         200: z.object({
           postURL: z.string(),
-          formData: z.record(z.any()),
+          formData: z.record(z.string(), z.any()),
           objectName: z.string()
         })
       },

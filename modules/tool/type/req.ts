@@ -25,8 +25,8 @@ export const SystemVarSchema = z.object({
 export type SystemVarType = z.infer<typeof SystemVarSchema>;
 
 export const ToolCallbackReturnSchema = z.object({
-  error: z.union([z.string(), z.record(z.any())]).optional(),
-  output: z.record(z.any()).optional()
+  error: z.union([z.string(), z.record(z.string(), z.any())]).optional(),
+  output: z.record(z.string(), z.any()).optional()
 });
 
 export type ToolCallbackReturnSchemaType = z.infer<typeof ToolCallbackReturnSchema>;

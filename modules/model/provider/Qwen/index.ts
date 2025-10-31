@@ -90,6 +90,30 @@ const models: ProviderConfigType = {
     },
     {
       type: ModelTypeEnum.llm,
+      model: 'qwen3-vl-flash',
+      maxContext: 25000,
+      maxTokens: 8000,
+      quoteMaxToken: 20000,
+      maxTemperature: 1,
+      responseFormatList: ['text'],
+      vision: true,
+      reasoning: false,
+      toolChoice: true
+    },
+    {
+      type: ModelTypeEnum.llm,
+      model: 'qwen3-vl-plus',
+      maxContext: 25000,
+      maxTokens: 8000,
+      quoteMaxToken: 20000,
+      maxTemperature: 1,
+      responseFormatList: ['text'],
+      vision: true,
+      reasoning: false,
+      toolChoice: true
+    },
+    {
+      type: ModelTypeEnum.llm,
       model: 'qwen3-32b',
       maxContext: 128000,
       maxTokens: 8000,
