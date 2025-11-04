@@ -1,4 +1,4 @@
-import { getCachedData, refreshVersionKey } from '@/cache';
+import { getCachedData } from '@/cache';
 import { SystemCacheKeyEnum } from '@/cache/type';
 import { isProd } from '@/constants';
 import { initOpenAPI } from '@/contract/openapi';
@@ -14,6 +14,7 @@ import { basePath, tempDir, tempToolsDir } from '@tool/constants';
 import { initWorkflowTemplates } from '@workflow/init';
 import express from 'express';
 import { join } from 'path';
+import { setupGlobalErrorHandling } from './utils/error';
 
 const requestSizeLimit = `${Number(process.env.MAX_API_SIZE || 10)}mb`;
 
@@ -72,3 +73,6 @@ const server = app.listen(PORT, (error?: Error) => {
     });
   })
 );
+
+// 全局错误处理设置
+setupGlobalErrorHandling(app);

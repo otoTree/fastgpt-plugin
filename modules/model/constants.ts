@@ -1,4 +1,4 @@
-import type { I18nStringType } from '@/type/i18n';
+import type { I18nStringStrictType } from '@/type/i18n';
 import type { ListModelsType } from './api/type';
 
 export const modelsBuffer: {
@@ -7,7 +7,11 @@ export const modelsBuffer: {
   data: []
 };
 
-export const ModelProviderMap = {
+export type ModelProviderMap = {
+  [key: string]: I18nStringStrictType;
+};
+
+export const ModelProviderMap: ModelProviderMap = {
   OpenAI: {
     en: 'OpenAI',
     'zh-CN': 'OpenAI',
@@ -203,7 +207,7 @@ export type ModelProviderIdType = keyof typeof ModelProviderMap;
 export type AiproxyMapProviderType = Record<
   number,
   {
-    name: I18nStringType | string;
+    name: I18nStringStrictType | string;
     provider: ModelProviderIdType; // Use to sort,get avatar
     avatar?: string;
   }
