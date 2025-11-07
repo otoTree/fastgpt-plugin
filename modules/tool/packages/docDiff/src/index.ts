@@ -1,0 +1,1119 @@
+import { uploadFile } from '@tool/utils/uploadFile';
+import { z } from 'zod';
+
+export const InputType = z.object({
+  originalText: z.string().min(1, '原始文档内容不能为空'),
+  modifiedText: z.string().min(1, '修改后文档内容不能为空'),
+  title: z.string().optional().default('文档对比报告')
+});
+
+export const OutputType = z.object({
+  htmlUrl: z.string(),
+  diffs: z.array(
+    z.object({
+      type: z.enum(['added', 'removed', 'modified']),
+      original: z.string().optional(),
+      modified: z.string().optional(),
+      lineNumber: z.number()
+    })
+  )
+});
+
+// 输入类型：title 是可选的
+export type InputType = {
+  originalText: string;
+  modifiedText: string;
+  title?: string;
+};
+
+// 输出类型
+export type OutputType = {
+  htmlUrl: string;
+  diffs: {
+    type: 'added' | 'removed' | 'modified';
+    original?: string;
+    modified?: string;
+    lineNumber: number;
+  }[];
+};
+
+// 定义段落差异类型
+type DiffType = 'unchanged' | 'added' | 'removed' | 'modified';
+
+interface ParagraphDiff {
+  type: DiffType;
+  original?: string;
+  modified?: string;
+  lineNumber?: number;
+}
+
+// 分割文档为行
+function splitIntoLines(text: string): string[] {
+  return text.split('\n');
+}
+
+// 计算两个段的相似度
+function calculateSimilarity(text1: string, text2: string): number {
+  // 移除首尾空白字符
+  const clean1 = text1.trim();
+  const clean2 = text2.trim();
+
+  // 如果两行都为空，则完全相同
+  if (!clean1 && !clean2) return 1.0;
+  if (!clean1 || !clean2) return 0.0;
+
+  // 如果内容完全相同，直接返回1.0
+  if (clean1 === clean2) return 1.0;
+
+  // 移除所有空白字符并转换为小写进行比较
+  const chars1 = clean1.replace(/\s+/g, '').toLowerCase();
+  const chars2 = clean2.replace(/\s+/g, '').toLowerCase();
+
+  const longer = chars1.length > chars2.length ? chars1 : chars2;
+  const shorter = chars1.length > chars2.length ? chars2 : chars1;
+
+  if (longer.length === 0) return 1.0;
+
+  const matches = Array.from(longer).filter(
+    (char, index) => index < shorter.length && char === shorter[index]
+  ).length;
+
+  return matches / longer.length;
+}
+
+// 对比两个文档
+function compareDocuments(originalText: string, modifiedText: string): ParagraphDiff[] {
+  const originalLines = splitIntoLines(originalText);
+  const modifiedLines = splitIntoLines(modifiedText);
+
+  const diffs: ParagraphDiff[] = [];
+  let origIndex = 0;
+  let modIndex = 0;
+  let currentLineNumber = 1; // 使用连续的行号
+
+  while (origIndex < originalLines.length || modIndex < modifiedLines.length) {
+    const originalLine = originalLines[origIndex] || '';
+    const modifiedLine = modifiedLines[modIndex] || '';
+
+    // 如果其中一个文档已经处理完毕
+    if (origIndex >= originalLines.length) {
+      // 只有修改后的文档有内容，这是新增行
+      if (modifiedLine.trim()) {
+        // 只添加非空行
+        diffs.push({
+          type: 'added',
+          modified: modifiedLine,
+          lineNumber: currentLineNumber++
+        });
+      }
+      modIndex++;
+      continue;
+    }
+
+    if (modIndex >= modifiedLines.length) {
+      // 只有原始文档有内容，这是删除行
+      if (originalLine.trim()) {
+        // 只添加非空行
+        diffs.push({
+          type: 'removed',
+          original: originalLine,
+          lineNumber: currentLineNumber++
+        });
+      }
+      origIndex++;
+      continue;
+    }
+
+    // 如果两行都是空的，跳过
+    if (!originalLine.trim() && !modifiedLine.trim()) {
+      origIndex++;
+      modIndex++;
+      continue;
+    }
+
+    // 计算行相似度
+    const similarity = calculateSimilarity(originalLine, modifiedLine);
+
+    if (similarity > 0.9) {
+      // 完全相同的行，标记为unchanged
+      diffs.push({
+        type: 'unchanged',
+        original: originalLine,
+        modified: modifiedLine,
+        lineNumber: currentLineNumber++
+      });
+      origIndex++;
+      modIndex++;
+    } else if (similarity > 0.8) {
+      // 修改的行
+      diffs.push({
+        type: 'modified',
+        original: originalLine,
+        modified: modifiedLine,
+        lineNumber: currentLineNumber++
+      });
+      origIndex++;
+      modIndex++;
+    } else {
+      // 寻找最佳匹配
+      let bestMatchIndex = -1;
+      let bestSimilarity = 0;
+
+      for (let i = 0; i < Math.min(3, modifiedLines.length - modIndex); i++) {
+        const candidateSimilarity = calculateSimilarity(originalLine, modifiedLines[modIndex + i]);
+        if (candidateSimilarity > bestSimilarity) {
+          bestSimilarity = candidateSimilarity;
+          bestMatchIndex = i;
+        }
+      }
+
+      if (bestSimilarity > 0.6) {
+        // 找到匹配，先添加新增的行
+        for (let i = 0; i < bestMatchIndex; i++) {
+          const addedLine = modifiedLines[modIndex + i];
+          if (addedLine.trim()) {
+            // 只添加非空行
+            diffs.push({
+              type: 'added',
+              modified: addedLine,
+              lineNumber: currentLineNumber++
+            });
+          }
+        }
+
+        // 添加修改的行
+        diffs.push({
+          type: 'modified',
+          original: originalLine,
+          modified: modifiedLines[modIndex + bestMatchIndex],
+          lineNumber: currentLineNumber++
+        });
+        modIndex += bestMatchIndex + 1;
+        origIndex++;
+      } else {
+        // 没有找到匹配，可能是删除
+        if (originalLine.trim()) {
+          // 只添加非空行
+          diffs.push({
+            type: 'removed',
+            original: originalLine,
+            lineNumber: currentLineNumber++
+          });
+        }
+        origIndex++;
+      }
+    }
+  }
+
+  return diffs;
+}
+
+// 生成 HTML 报告
+function generateHtmlReport(diffs: ParagraphDiff[], title: string): string {
+  const timestamp = new Date().toLocaleString('zh-CN');
+
+  const css = `
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --bg-primary: #ffffff;
+        --bg-secondary: #f8fafc;
+        --bg-tertiary: #f1f5f9;
+        --border: #e2e8f0;
+        --text-primary: #1e293b;
+        --text-secondary: #64748b;
+        --text-tertiary: #94a3b8;
+        --accent: #2563eb;
+        --accent-hover: #1d4ed8;
+        --success: #10b981;
+        --danger: #ef4444;
+        --warning: #f59e0b;
+        --radius: 12px;
+        --radius-sm: 8px;
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+        --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.08);
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Display', 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+        line-height: 1.5;
+        color: var(--text-primary);
+        background-color: var(--bg-primary);
+        height: 100vh;
+        overflow: hidden;
+        font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+      }
+
+      .container {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+      }
+
+      .header {
+        background: var(--bg-secondary);
+        padding: 20px 24px;
+        flex-shrink: 0;
+      }
+
+      .header-content {
+        max-width: 1200px;
+      }
+
+      .header h1 {
+        margin: 0 0 8px 0;
+        font-size: 20px;
+        font-weight: 500;
+        color: var(--text-primary);
+        letter-spacing: -0.025em;
+      }
+
+      .timestamp {
+        color: var(--text-tertiary);
+        font-size: 13px;
+        margin-bottom: 16px;
+      }
+
+      .stats {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .stat-card {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 12px 16px;
+        min-width: 80px;
+      }
+
+      .stat-number {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 2px;
+        letter-spacing: -0.025em;
+      }
+
+      .stat-label {
+        font-size: 12px;
+        color: var(--text-tertiary);
+        font-weight: 500;
+      }
+
+      .unchanged { color: var(--success); }
+      .added { color: var(--accent); }
+      .removed { color: var(--danger); }
+      .modified { color: var(--warning); }
+
+      .navigation {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 0;
+      }
+
+      .nav-group {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .filter-tabs {
+        display: flex;
+        align-items: center;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 2px;
+        gap: 2px;
+      }
+
+      .filter-tab {
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        padding: 6px 12px;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 500;
+        transition: all 0.15s ease;
+      }
+
+      .filter-tab:hover {
+        color: var(--text-primary);
+      }
+
+      .filter-tab.active {
+        background: var(--bg-primary);
+        color: var(--accent);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+      }
+
+      .filter-tabs .lock-btn {
+        margin-left: 8px;
+        border-radius: var(--radius-sm);
+      }
+
+      .stat-card.clickable {
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .stat-card.clickable:hover {
+        transform: translateY(-1px);
+        box-shadow: var(--shadow);
+        border-color: var(--accent);
+      }
+
+      .stat-card.clickable.active {
+        border-color: var(--accent);
+        background: rgba(37, 99, 235, 0.04);
+      }
+
+      .lock-btn {
+        min-width: 40px;
+        padding: 8px;
+        justify-content: center;
+        height: 32px;
+        font-size: 14px;
+        flex-shrink: 0;
+        margin-left: 12px;
+      }
+
+      .lock-btn.locked {
+        background: rgba(37, 99, 235, 0.1);
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .nav-btn {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+        border-radius: var(--radius-sm);
+        padding: 8px 16px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition: all 0.15s ease;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .nav-btn:hover:not(:disabled) {
+        background: var(--bg-secondary);
+        border-color: var(--accent);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow);
+      }
+
+      .nav-btn:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      .counter {
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 500;
+        margin: 0 12px;
+      }
+
+      .nav-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .content-container {
+        display: flex;
+        height: calc(100vh - 240px);
+        overflow: hidden;
+        gap: 16px;
+        padding: 0 24px 24px;
+      }
+
+      .column {
+        flex: 1;
+        overflow-y: auto;
+        background: var(--bg-secondary);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .column-header {
+        padding: 16px 20px;
+        background: var(--bg-tertiary);
+        border-bottom: 1px solid var(--border);
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 14px;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        letter-spacing: -0.025em;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 48px;
+        box-sizing: border-box;
+      }
+
+      .diff-item {
+        position: relative;
+        transition: all 0.15s ease;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 16px 20px;
+      }
+
+      .diff-item.highlight {
+        background: linear-gradient(90deg, rgba(37, 99, 235, 0.1) 0%, rgba(37, 99, 235, 0.05) 100%) !important;
+        border-left: 3px solid var(--accent) !important;
+        animation: highlight-pulse 2s ease-out forwards;
+      }
+
+      .diff-badge {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        padding: 4px 8px;
+        border-radius: var(--radius-sm);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+        flex-shrink: 0;
+        margin-top: 2px;
+      }
+
+      .badge-added {
+        color: var(--accent);
+        border-color: var(--accent);
+        background: rgba(37, 99, 235, 0.08);
+      }
+
+      .badge-removed {
+        color: var(--danger);
+        border-color: var(--danger);
+        background: rgba(239, 68, 68, 0.08);
+      }
+
+      .badge-modified {
+        color: var(--warning);
+        border-color: var(--warning);
+        background: rgba(245, 158, 11, 0.08);
+      }
+
+      .diff-paragraph {
+        font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', monospace;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--text-primary);
+        white-space: pre-wrap;
+        word-break: break-word;
+        flex: 1;
+      }
+
+      .empty-line {
+        min-height: 22px;
+        color: var(--text-tertiary);
+        font-style: italic;
+        opacity: 0.5;
+      }
+
+      .empty-line::before {
+        content: "空行";
+        font-size: 12px;
+      }
+
+      .diff-item.unchanged .diff-paragraph {
+        color: var(--text-secondary);
+      }
+
+      .diff-item.modified .diff-paragraph {
+        color: var(--warning);
+      }
+
+      .diff-item.removed .diff-paragraph {
+        color: var(--danger);
+        background: rgba(239, 68, 68, 0.04);
+        border-radius: var(--radius-sm);
+        padding: 2px 4px;
+      }
+
+      .diff-item.added .diff-paragraph {
+        color: var(--accent);
+        background: rgba(37, 99, 235, 0.04);
+        border-radius: var(--radius-sm);
+        padding: 2px 4px;
+      }
+
+      /* 滚动条样式 */
+      .column::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .column::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      .column::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 3px;
+        transition: background 0.2s;
+      }
+
+      .column::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+      }
+
+      /* 动画 */
+      @keyframes highlight-pulse {
+        0% {
+          background: linear-gradient(90deg, rgba(37, 99, 235, 0.15) 0%, rgba(37, 99, 235, 0.08) 100%);
+          border-left-color: var(--accent);
+          transform: translateX(0);
+        }
+        50% {
+          transform: translateX(1px);
+        }
+        100% {
+          background: linear-gradient(90deg, rgba(37, 99, 235, 0.03) 0%, transparent 100%);
+          border-left-color: var(--accent);
+          transform: translateX(0);
+        }
+      }
+
+      /* 响应式设计 */
+      @media (max-width: 768px) {
+        .content-container {
+          flex-direction: column;
+          gap: 12px;
+          padding: 0 16px 16px;
+        }
+
+        .header {
+          padding: 16px;
+        }
+
+        .stats {
+          flex-wrap: wrap;
+          gap: 12px;
+        }
+
+        .stat-card {
+          min-width: 70px;
+          padding: 10px 12px;
+        }
+
+        .diff-item {
+          padding: 12px 16px;
+          gap: 10px;
+        }
+
+        .diff-paragraph {
+          font-size: 13px;
+        }
+      }
+
+      @keyframes highlight-fade {
+        0% {
+          background-color: #bbdefb;
+          box-shadow: 0 2px 8px rgba(33, 150, 243, 0.4);
+        }
+        70% {
+          background-color: #e3f2fd;
+          box-shadow: 0 2px 4px rgba(33, 150, 243, 0.2);
+        }
+        100% {
+          background-color: transparent;
+          box-shadow: none;
+          border-left-color: transparent !important;
+        }
+      }
+
+      .diff-paragraph.empty-line::before {
+        content: "·";
+        display: block;
+        text-align: center;
+      }
+
+      .diff-badge {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.7em;
+        font-weight: 500;
+        text-transform: uppercase;
+      }
+
+      .badge-added {
+        background: #2196F3;
+        color: white;
+      }
+
+      .badge-removed {
+        background: #F44336;
+        color: white;
+      }
+
+      .badge-modified {
+        background: #FF9800;
+        color: white;
+      }
+
+
+    </style>
+  `;
+
+  const js = `
+    <script>
+      let currentIndex = -1;
+      let changes = [];
+      let currentFilter = 'all';
+      let isLocked = false;
+
+      // 初始化变更列表
+      function initChanges() {
+        // 统计所有有变更的项
+        const allItems = document.querySelectorAll('.column:first-child .diff-item');
+        allItems.forEach((item, index) => {
+          // 统计所有有变更的类型（删除、修改、新增）
+          // 对于修改类型，左右两侧都有modified类，所以检查左侧就足够了
+          if (item.classList.contains('removed') ||
+              item.classList.contains('modified') ||
+              item.classList.contains('added')) {
+            changes.push(index);
+          }
+        });
+        setupEventListeners();
+        updateNavigation();
+      }
+
+      // 设置事件监听器
+      function setupEventListeners() {
+        // 统计卡片点击事件
+        document.querySelectorAll('.stat-card.clickable').forEach(card => {
+          card.addEventListener('click', function() {
+            const type = this.dataset.type;
+            setFilter(type);
+          });
+        });
+
+        // 筛选标签点击事件
+        document.querySelectorAll('.filter-tab').forEach(tab => {
+          tab.addEventListener('click', function() {
+            const filter = this.dataset.filter;
+            setFilter(filter);
+          });
+        });
+
+        // 滚动锁定事件
+        const leftColumn = document.querySelector('.column:first-child');
+        const rightColumn = document.querySelector('.column:last-child');
+        let isProgrammaticScroll = false; // 标记是否为程序触发的滚动
+
+        leftColumn.addEventListener('scroll', function() {
+          if (isLocked && !isProgrammaticScroll) {
+            isProgrammaticScroll = true;
+            rightColumn.scrollTop = this.scrollTop;
+            setTimeout(() => { isProgrammaticScroll = false; }, 50);
+          }
+        });
+
+        rightColumn.addEventListener('scroll', function() {
+          if (isLocked && !isProgrammaticScroll) {
+            isProgrammaticScroll = true;
+            leftColumn.scrollTop = this.scrollTop;
+            setTimeout(() => { isProgrammaticScroll = false; }, 50);
+          }
+        });
+      }
+
+      // 设置筛选器
+      function setFilter(filter) {
+        currentFilter = filter;
+
+        // 更新统计卡片状态
+        document.querySelectorAll('.stat-card.clickable').forEach(card => {
+          card.classList.remove('active');
+          if (card.dataset.type === filter) {
+            card.classList.add('active');
+          }
+        });
+
+        // 更新筛选标签状态
+        document.querySelectorAll('.filter-tab').forEach(tab => {
+          tab.classList.remove('active');
+          if (tab.dataset.filter === filter) {
+            tab.classList.add('active');
+          }
+        });
+
+        // 重置当前索引并更新导航
+        currentIndex = -1;
+        updateNavigation();
+
+        // 如果有变更，导航到第一处
+        if (changes.length > 0) {
+          navigateToChange(0);
+        }
+      }
+
+      // 获取当前筛选的变更列表
+      function getFilteredChanges() {
+        if (currentFilter === 'all') {
+          return changes;
+        }
+
+        const filteredChanges = [];
+        const allItems = document.querySelectorAll('.column:first-child .diff-item');
+
+        allItems.forEach((item, index) => {
+          let type = '';
+
+          // 检查每个diff-item的类型
+          if (item.classList.contains('removed')) {
+            type = 'removed';
+          } else if (item.classList.contains('modified')) {
+            type = 'modified';
+          } else if (item.classList.contains('added')) {
+            type = 'added';
+          } else if (item.classList.contains('unchanged')) {
+            type = 'unchanged';
+          }
+
+          // 对于新增类型，需要检查右侧对应项
+          if (currentFilter === 'added') {
+            const rightItem = document.querySelector('.column:last-child').querySelectorAll('.diff-item')[index];
+            if (rightItem && rightItem.classList.contains('added')) {
+              type = 'added';
+            }
+          }
+
+          if (type === currentFilter) {
+            filteredChanges.push(index);
+          }
+        });
+
+        return filteredChanges;
+      }
+
+      // 更新导航按钮状态
+      function updateNavigation() {
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const counter = document.getElementById('counter');
+
+        const filteredChanges = getFilteredChanges();
+
+        prevBtn.disabled = currentIndex <= 0;
+        nextBtn.disabled = currentIndex >= filteredChanges.length - 1;
+
+        if (filteredChanges.length === 0) {
+          const filterText = currentFilter === 'all' ? '变更' :
+                            currentFilter === 'added' ? '新增' :
+                            currentFilter === 'removed' ? '删除' : '修改';
+          counter.textContent = \`无\${filterText}\`;
+          prevBtn.disabled = true;
+          nextBtn.disabled = true;
+        } else {
+          counter.textContent = \`\${currentIndex + 1} / \${filteredChanges.length}\`;
+        }
+      }
+
+      // 导航到指定变更
+      function navigateToChange(index) {
+        // 清除之前的高亮
+        document.querySelectorAll('.diff-item.highlight').forEach(item => {
+          item.classList.remove('highlight');
+        });
+
+        const filteredChanges = getFilteredChanges();
+
+        if (index >= 0 && index < filteredChanges.length) {
+          currentIndex = index;
+          const targetIndex = filteredChanges[currentIndex];
+
+          // 同时高亮左右两栏的对应项
+          const leftColumnItem = document.querySelector('.column:first-child').querySelectorAll('.diff-item')[targetIndex];
+          const rightColumnItem = document.querySelector('.column:last-child').querySelectorAll('.diff-item')[targetIndex];
+
+          if (leftColumnItem && rightColumnItem) {
+            leftColumnItem.classList.add('highlight');
+            rightColumnItem.classList.add('highlight');
+
+            // 根据锁定状态选择滚动方式
+            if (isLocked) {
+              // 锁定状态下，使用直接scrollTop设置避免循环事件
+              const leftColumn = document.querySelector('.column:first-child');
+              const rightColumn = document.querySelector('.column:last-child');
+
+              // 计算目标滚动位置
+              const itemRect = leftColumnItem.getBoundingClientRect();
+              const containerRect = leftColumn.getBoundingClientRect();
+              const targetScrollTop = leftColumn.scrollTop + (itemRect.top - containerRect.top) - (containerRect.height / 2) + (itemRect.height / 2);
+
+              // 同时设置两个列的位置
+              leftColumn.scrollTop = targetScrollTop;
+              rightColumn.scrollTop = targetScrollTop;
+            } else {
+              // 未锁定状态下，分别滚动两列到最佳位置
+              leftColumnItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              rightColumnItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+
+            // 2秒后自动移除高亮
+            setTimeout(() => {
+              leftColumnItem.classList.remove('highlight');
+              rightColumnItem.classList.remove('highlight');
+            }, 2000);
+          }
+        }
+
+        updateNavigation();
+      }
+
+      // 上一处变更
+      function previousChange() {
+        const filteredChanges = getFilteredChanges();
+        if (currentIndex > 0) {
+          navigateToChange(currentIndex - 1);
+        }
+      }
+
+      // 下一处变更
+      function nextChange() {
+        const filteredChanges = getFilteredChanges();
+        if (currentIndex < filteredChanges.length - 1) {
+          navigateToChange(currentIndex + 1);
+        }
+      }
+
+      // 切换滚动锁定
+      function toggleLock() {
+        isLocked = !isLocked;
+        const lockBtn = document.getElementById('lockBtn');
+        const lockIcon = document.getElementById('lockIcon');
+
+        if (isLocked) {
+          lockBtn.classList.add('locked');
+          lockIcon.textContent = '🔒';
+          lockBtn.title = '解除左右滚动同步锁定';
+        } else {
+          lockBtn.classList.remove('locked');
+          lockIcon.textContent = '🔓';
+          lockBtn.title = '锁定左右滚动同步';
+        }
+      }
+
+      // 页面加载完成后初始化
+      document.addEventListener('DOMContentLoaded', function() {
+        initChanges();
+
+        // 如果有变更，自动导航到第一处
+        if (changes.length > 0) {
+          navigateToChange(0);
+        }
+      });
+
+      // 键盘快捷键
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'ArrowLeft' && !e.target.matches('input, textarea')) {
+          previousChange();
+        } else if (e.key === 'ArrowRight' && !e.target.matches('input, textarea')) {
+          nextChange();
+        }
+      });
+    </script>
+  `;
+
+  // 计算统计信息
+  const stats = diffs.reduce(
+    (acc, diff) => {
+      acc[diff.type]++;
+      return acc;
+    },
+    { unchanged: 0, added: 0, removed: 0, modified: 0 }
+  );
+
+  // 生成左侧原始内容
+  const originalContent = diffs
+    .map((diff, index) => {
+      let content = '';
+      let badge = '';
+      const typeClass = diff.type;
+
+      if (diff.type === 'added') {
+        // 新增的内容在左侧显示为空占位符
+        content = '<div class="diff-paragraph empty-line"></div>';
+      } else if (diff.type === 'removed') {
+        content = `<div class="diff-paragraph">${escapeHtml(diff.original || '')}</div>`;
+        badge = '<span class="diff-badge badge-removed">删除</span>';
+      } else if (diff.type === 'modified') {
+        content = `<div class="diff-paragraph">${escapeHtml(diff.original || '')}</div>`;
+        badge = '<span class="diff-badge badge-modified">修改</span>';
+      } else {
+        content = `<div class="diff-paragraph">${escapeHtml(diff.original || '')}</div>`;
+      }
+
+      return `
+      <div class="diff-item ${typeClass}" data-index="${index}">
+        ${badge}
+        ${content}
+      </div>
+    `;
+    })
+    .join('');
+
+  // 生成右侧修改后内容
+  const modifiedContent = diffs
+    .map((diff, index) => {
+      let content = '';
+      let badge = '';
+      const typeClass = diff.type;
+
+      if (diff.type === 'removed') {
+        // 删除的内容在右侧显示为空占位符
+        content = '<div class="diff-paragraph empty-line"></div>';
+      } else if (diff.type === 'added') {
+        content = `<div class="diff-paragraph">${escapeHtml(diff.modified || '')}</div>`;
+        badge = '<span class="diff-badge badge-added">新增</span>';
+      } else if (diff.type === 'modified') {
+        content = `<div class="diff-paragraph">${escapeHtml(diff.modified || '')}</div>`;
+        badge = '<span class="diff-badge badge-modified">修改</span>';
+      } else {
+        content = `<div class="diff-paragraph">${escapeHtml(diff.modified || '')}</div>`;
+      }
+
+      return `
+      <div class="diff-item ${typeClass}" data-index="${index}">
+        ${badge}
+        ${content}
+      </div>
+    `;
+    })
+    .join('');
+
+  const html = `<!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${title}</title>
+      ${css}
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <div class="header-content">
+            <h1>${title}</h1>
+            <div class="timestamp">生成时间: ${timestamp}</div>
+
+            <div class="stats">
+              <div class="stat-card clickable" data-type="added">
+                <div class="stat-number added">${stats.added}</div>
+                <div class="stat-label">新增</div>
+              </div>
+              <div class="stat-card clickable" data-type="removed">
+                <div class="stat-number removed">${stats.removed}</div>
+                <div class="stat-label">删除</div>
+              </div>
+              <div class="stat-card clickable" data-type="modified">
+                <div class="stat-number modified">${stats.modified}</div>
+                <div class="stat-label">修改</div>
+              </div>
+            </div>
+
+            <div class="navigation">
+              <div class="nav-group">
+                <div class="filter-tabs">
+                  <button class="filter-tab active" data-filter="all">全部</button>
+                  <button class="filter-tab" data-filter="added">新增</button>
+                  <button class="filter-tab" data-filter="removed">删除</button>
+                  <button class="filter-tab" data-filter="modified">修改</button>
+                </div>
+                <div class="nav-group">
+                  <button id="prevBtn" class="nav-btn" onclick="previousChange()">
+                    ← 上一处
+                  </button>
+                  <div id="counter" class="counter">0 / 0</div>
+                  <button id="nextBtn" class="nav-btn" onclick="nextChange()">
+                    下一处 →
+                  </button>
+                </div>
+              </div>
+              </div>
+          </div>
+        </div>
+
+        <div class="content-container">
+          <div class="column">
+            <div class="column-header">
+            原始文档
+            <button id="lockBtn" class="nav-btn lock-btn" onclick="toggleLock()" title="锁定左右滚动同步">
+              <span id="lockIcon">🔓</span>
+            </button>
+            </div>
+            ${originalContent}
+          </div>
+          <div class="column">
+            <div class="column-header">
+              <span>修改后文档</span>
+            </div>
+            ${modifiedContent}
+          </div>
+        </div>
+      </div>
+
+      ${js}
+    </body>
+    </html>
+  `;
+
+  return html;
+}
+
+// HTML 转义函数
+function escapeHtml(text: string): string {
+  const map: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+
+  return text.replace(/[&<>"']/g, (m) => map[m]);
+}
+
+export async function tool(input: z.infer<typeof InputType>) {
+  const diffs = compareDocuments(input.originalText, input.modifiedText);
+  const html = generateHtmlReport(diffs, input.title);
+
+  const { accessUrl } = await uploadFile({
+    buffer: Buffer.from(html, 'utf-8'),
+    defaultFilename: 'docdiff_report.html',
+    contentType: 'text/html'
+  });
+
+  // 过滤掉unchanged类型，只返回有变更的内容
+  const filteredDiffs = diffs.filter((diff) => diff.type !== 'unchanged');
+
+  return {
+    htmlUrl: accessUrl,
+    diffs: filteredDiffs
+  };
+}
